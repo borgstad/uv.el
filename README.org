@@ -1,0 +1,31 @@
+
+* Introduction
+uv.el provides an Emacs interface to [[https://github.com/astral-sh/uv][uv]], an extremely fast Python package installer and resolver. It uses the [[https://github.com/magit/transient][transient]] library to offer a Magit-like user experience for managing Python projects with uv.
+
+* Features
+- Initialize new uv projects (`uv init`).
+- Add, remove, and manage project dependencies (main, development, optional).
+- Lock project dependencies (`uv lock`).
+
+* Prerequisites
+- [[https://github.com/astral-sh/uv#installation][uv]] must be installed and accessible in your system's PATH.
+- Emacs 25.1 or later.
+- `transient.el` package (version 0.2.0 or later).
+
+* Installation
+The recommended way to install =uv.el= is via MELPA.
+
+1. Add MELPA to your =package-archives= if you haven't already:
+   #+BEGIN_SRC emacs-lisp
+
+   #+END_SRC
+
+* Usage
+** Entry Point
+The main entry point for all uv operations is the command:
+=M-x uv=
+
+This command opens a transient buffer (similar to Magit) listing available actions based on the current context.
+
+* Acknowledgements
+This package is based on [[https://github.com/cybniv/poetry.el][poetry.el]] by Sacha Frey and contributors. Thanks for their effort.
