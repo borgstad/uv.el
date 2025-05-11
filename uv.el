@@ -2,7 +2,7 @@
 
 ;; Copyright (C) 2025-  Andreas Borgstad
 
-;; Author: Gaby Launay <aborgstad@gmail.com>
+;; Author: Andreas Borgstad <aborgstad@gmail.com>
 ;; URL: https://github.com/borgstad/uv.el
 ;; Keywords: Python, Tools
 ;; Package-Version: 0.2.0
