@@ -13,15 +13,17 @@ uv.el provides an Emacs interface to [[https://github.com/astral-sh/uv][uv]], an
 - `transient.el` package (version 0.2.0 or later).
 
 * Installation
-The recommended way to install =uv.el= is via MELPA.
-
-1. Add MELPA to your =package-archives= if you haven't already:
-   #+BEGIN_SRC emacs-lisp
-
-   #+END_SRC
+The package is (not yet) available via Melpa.
+It is therefore recommended to install it via the =:vc= argument:
+#+begin_src emacs-lisp
+  (use-package uv
+    :vc (:url  "https://github.com/borgstad/uv.el")
+    ;; Add other configurations here, e.g., keybindings
+    :bind ("C-c u" . uv)
+    )
+#+end_src
 
 * Usage
-** Entry Point
 The main entry point for all uv operations is the command:
 =M-x uv=
 
