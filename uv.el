@@ -143,11 +143,11 @@ Uses ``uv add''."
 ;;;###autoload
 (defun uv-add-dev-dep (package-string)
   "Add PACKAGE-STRING (space-separated) as new development dependencies.
-Uses ``uv add -D''."
+Uses ``uv add --dev''."
   (interactive "sPackage name(s): ")
   (message "Adding dev dependency: %s" package-string)
-  ;; Call uv-call-add with the package string and the '-D' argument
-  (uv-call-add package-string '("-D")))
+  ;; Call uv-call-add with the package string and the '--dev' argument
+  (uv-call-add package-string '("--dev")))
 
 ;;;###autoload
 (defun uv-add-opt-dep (package)
@@ -206,7 +206,7 @@ TYPE is the type of dependency (dep, dev or opt)."
 
 (defun uv-remove-dev-dep (package)
   "Remove PACKAGE from the project development dependencies."
-  (uv-call 'remove (list package "-D")))
+  (uv-call 'remove (list package "--dev")))
 
 ;;;###autoload
 (defun uv-install-install ()
