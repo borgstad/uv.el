@@ -5,8 +5,8 @@
 ;; Author: Andreas Borgstad <aborgstad@gmail.com>
 ;; URL: https://github.com/borgstad/uv.el
 ;; Keywords: Python, Tools
-;; Package-Version: 0.2.0
-;; Package-Requires: ((transient "0.2.0") (emacs "25.1"))
+;; Package-Version: 0.3.0
+;; Package-Requires: ((transient "0.2.0") (emacs "26.1"))
 
 ;; This program is free software; you can redistribute it and/or
 ;; modify it under the terms of the GNU General Public License
@@ -33,7 +33,8 @@
 
 ;;; Code:
 
-(require 'cl-lib)
+(require 'ansi-color)
+(require 'compile)
 (require 'transient)
 (require 'subr-x)
 
@@ -42,102 +43,98 @@
   :prefix "uv-"
   :group 'tools)
 
+(defcustom uv-executable "uv"
+  "Name of, or path to, the uv executable."
+  :type 'string
+  :group 'uv)
+
 (defmacro uv-with-current-file (file &rest body)
   "Execute the forms in BODY while temporary visiting FILE."
-  `(save-current-buffer
-     (let* ((file ,file)
-            (keep (find-buffer-visiting file))
-            (buffer (find-file-noselect file)))
-       (set-buffer buffer)
-       (prog1
-           (progn
-             ,@body)
-         (unless keep
-           (kill-buffer buffer))))))
+  (declare (indent 1) (debug t))
+  (let ((keep (make-symbol "keep"))
+        (buffer (make-symbol "buffer")))
+    `(let* ((,keep (find-buffer-visiting ,file))
+            (,buffer (find-file-noselect ,file)))
+       (save-current-buffer
+         (set-buffer ,buffer)
+         (prog1
+             (progn ,@body)
+           (unless ,keep
+             (kill-buffer ,buffer)))))))
 
 ;;;###autoload (autoload 'uv "uv" nil t)
 (transient-define-prefix uv ()
   "Uv menu."
-  [:description ("Uv")]
   [:if uv-find-project-root
-       :description "Dependencies    "
-       ("a" "Add" uv-add)
-       ("r" "Remove" uv-remove)
-       ("l" "Lock" uv-lock)
-       ]
+   :description "Dependencies"
+   ("a" "Add" uv-add)
+   ("r" "Remove" uv-remove)
+   ("l" "Lock" uv-lock)]
   [:if uv-find-project-root
-    :description "Project"
-	("e" "Edit 'pyproject.toml'" uv-edit-pyproject-toml)
-	("b" "Build" uv-build)
-	("p" "Publish" uv-publish)]
+   :description "Project"
+   ("e" "Edit 'pyproject.toml'" uv-edit-pyproject-toml)
+   ("b" "Build" uv-build)
+   ("x" "Run" uv-run)]
   [:if-not uv-find-project-root
-    :description "Project"
-    ("i" "Init" uv-init)]
-  )
+   :description "Project"
+   ("i" "Init" uv-init)]
+  [("o" "Show last output" uv-show-output)])
 
 (transient-define-prefix uv-add ()
   "Uv add dependency menu."
   ["Arguments"
-   (uv:--git)
-   (uv:--path)
    (uv:--python)
-   (uv:--platform)
-   ]
+   (uv:--editable)
+   (uv:--branch)
+   (uv:--tag)
+   (uv:--rev)]
   ["Add"
    ("a" "Add a dependency" uv-add-dep)
    ("d" "Add a development dependency" uv-add-dev-dep)
-   ("o" "Add an optional dependency" uv-add-opt-dep)
-   ])
-
-(transient-define-argument uv:--git ()
-  :description "Git repository"
-  :class 'transient-option
-  :key "-g"
-  :argument "--git=")
-
-(transient-define-argument uv:--path ()
-  :description "Dependency path"
-  :class 'transient-option
-  :key "-P"
-  :argument "--path=")
+   ("o" "Add an optional dependency" uv-add-opt-dep)])
 
 (transient-define-argument uv:--python ()
-  :description "Python version"
+  :description "Python interpreter"
   :class 'transient-option
   :key "-p"
   :argument "--python=")
 
-(transient-define-argument uv:--platform ()
-  :description "Platforms"
+(transient-define-argument uv:--editable ()
+  :description "Add as editable"
+  :class 'transient-switch
+  :key "-e"
+  :argument "--editable")
+
+(transient-define-argument uv:--branch ()
+  :description "Git branch"
+  :class 'transient-option
+  :key "-b"
+  :argument "--branch=")
+
+(transient-define-argument uv:--tag ()
+  :description "Git tag"
   :class 'transient-option
   :key "-t"
-  :argument "--platform=")
+  :argument "--tag=")
 
-(transient-define-argument uv:--extras ()
-  :description "Extra sets of dependencies to install"
+(transient-define-argument uv:--rev ()
+  :description "Git commit"
   :class 'transient-option
-  :key "-E"
-  :argument "--extras=")
+  :key "-r"
+  :argument "--rev=")
 
 (defun uv-call-add (package-string &optional args)
   "Add packages from PACKAGE-STRING (space-separated) as dependencies.
 ARGS are additional arguments passed to ``uv add''."
-  (let* ((transient (transient-args 'uv-add))
-         ;; Split the package string into a list of individual package names
-         (package-list (split-string package-string " " t)) ; =t= discards empty strings
-         ;; Combine the list of package names, the explicit args, and the transient args
-         (full-uv-args (append package-list (or args '()) transient)))
-
-    ;; Call the base uv-call function with 'add and the combined arguments
-    (uv-call 'add full-uv-args)))
+  (uv-call 'add (append (split-string package-string " " t)
+                        args
+                        (uv--transient-args 'uv-add))))
 
 ;;;###autoload
 (defun uv-add-dep (package-string)
   "Add PACKAGE-STRING (space-separated) as new dependencies.
 Uses ``uv add''."
   (interactive "sPackage name(s): ")
-  (message "Adding dependency: %s" package-string)
-  ;; Call uv-call-add with the package string and no extra args list
   (uv-call-add package-string))
 
 ;;;###autoload
@@ -145,75 +142,28 @@ Uses ``uv add''."
   "Add PACKAGE-STRING (space-separated) as new development dependencies.
 Uses ``uv add --dev''."
   (interactive "sPackage name(s): ")
-  (message "Adding dev dependency: %s" package-string)
-  ;; Call uv-call-add with the package string and the '--dev' argument
   (uv-call-add package-string '("--dev")))
 
 ;;;###autoload
-(defun uv-add-opt-dep (package)
-  "Add PACKAGE as a new optional dependency to the project.
-
-PACKAGE can be a list of packages, separated by spaces."
-  (interactive "sPackage name(s): ")
-  (message "Adding optional dependency: %s" package)
-  (uv-call-add package '("--optional")))
+(defun uv-add-opt-dep (package-string extra)
+  "Add PACKAGE-STRING (space-separated) to the optional dependency EXTRA.
+Uses ``uv add --optional''."
+  (interactive "sPackage name(s): \nsOptional extra: ")
+  (uv-call-add package-string (list "--optional" extra)))
 
 ;;;###autoload
-(defun uv-remove (package type)
-  "Remove PACKAGE from the project dependencies.
-TYPE is the type of dependency (dep, dev or opt)."
-  (interactive (let* ((packages (cl-concatenate 'list
-				 (cl-map 'list
-				      (lambda (dep)
-					(format "[dep]  %s" dep))
-				      (uv-get-dependencies))
-				 (cl-map 'list
-				      (lambda (dep)
-					(format "[dev]  %s" dep))
-				      (uv-get-dependencies t))
-				 (cl-map 'list
-				      (lambda (dep)
-					(format "[opt]  %s" dep))
-				      (uv-get-dependencies nil t))))
-		      (package (when packages
-				 (completing-read "Package: "
-						  packages
-						  nil t))))
-		 (if (not package)
-		     (list nil nil)
-		   (string-match "^\\[\\(.*\\)\\]  \\([^[:space:]]*\\)[[:space:]]*(\\(.*\\))$" package)
-		   (list (match-string 2 package)
-			 (match-string 1 package)))))
-  (if (not package)
-      (uv-error "No packages to remove")
-    (pcase type
-      ("dep"
-       (uv-message (format "Removing package %s"
-			       package))
-       (uv-remove-dep package))
-      ("opt"
-       (uv-message (format "Removing optional package %s"
-			       package))
-       (uv-remove-dep package))
-      ("dev"
-       (uv-message (format "Removing development package %s"
-			       package))
-       (uv-remove-dev-dep package)))))
-
-(defun uv-remove-dep (package)
-  "Remove PACKAGE from the project dependencies."
-  (uv-call 'remove (list package)))
-
-(defun uv-remove-dev-dep (package)
-  "Remove PACKAGE from the project development dependencies."
-  (uv-call 'remove (list package "--dev")))
-
-;;;###autoload
-(defun uv-install-install ()
-  "Install the project dependencies."
-  (interactive)
-  (let ((args (transient-args 'uv-install)))
-    (uv-call 'install args)))
+(defun uv-remove (args)
+  "Remove a dependency from the project.
+ARGS are the ``uv remove'' arguments naming the package and its group."
+  (interactive
+   (progn
+     (uv-ensure-in-project)
+     (let ((candidates (uv--dependency-candidates)))
+       (unless candidates
+         (uv--error "No dependencies to remove"))
+       (list (cdr (assoc (completing-read "Remove package: " candidates nil t)
+                         candidates))))))
+  (uv-call 'remove args))
 
 ;;;###autoload
 (defun uv-lock ()
@@ -228,55 +178,10 @@ TYPE is the type of dependency (dep, dev or opt)."
   (uv-call 'build))
 
 ;;;###autoload
-(defun uv-publish (repo username password)
-  "Publish the package to a remote repository.
-
-REPO is the repository and USERNAME and PASSWORD the
-credential to use."
-  (interactive (list
-		(completing-read "Repository: "
-				 (or (uv-publish-get-repositories)
-				     (uv-error "No repository configured, please use `uv config` to add repositories")
-				     )
-				 nil t)
-		(read-string "Username: ")
-		(read-passwd "Password: ")))
-  (uv-call 'publish
-	       (list "-r" repo "-u" username "-p" password)))
-
-(defun uv-publish-get-repositories ()
-  "Return the list of configured repostitories."
-  (let ((repos (uv-get-configuration "repositories")))
-    (mapcar #'car repos)))
-
-;;;###autoload
-(defun uv-new (path)
-  "Create a new Python project at PATH."
-  (interactive "GProject path: ")
-  (let* ((path (expand-file-name path))
-	 (project-name (file-name-base path))
-	 (default-directory path))
-    (message "Creating new project: %s" path)
-    (unless (file-directory-p path)
-      (make-directory path))
-    (uv-call 'new (list path) path nil t)
-    ;; Open __init__.py
-    (find-file (concat (file-name-as-directory
-			(concat (file-name-as-directory path)
-				(uv-normalize-project-name project-name)))
-		       "__init__.py"))
-    (save-buffer)
-    ;; make sure the virtualenv is created
-    (message "Creating the virtual environment...")
-    (uv-call 'env '("use" "python") nil nil t)
-    (message "Done")))
-
-;;;###autoload
 (defun uv-init ()
   "Initialize a new Uv project."
   (interactive)
   (uv-call 'init))
-
 
 ;;;###autoload
 (defun uv-edit-pyproject-toml ()
@@ -287,88 +192,97 @@ credential to use."
 
 ;;;###autoload
 (defun uv-run (command)
-  "Run COMMAND in the appropriate environment."
-  (interactive (list (completing-read "Command: "
-	   (let* ((file (uv-find-pyproject-file))
-		  (scripts '()))
-	     (when file
-	       (uv-with-current-file file
-		(goto-char (point-min))
-		(when (re-search-forward
-		       "^\\[tool\\.uv\\.scripts\\]" nil t)
-		  (forward-line 1)
-		  (beginning-of-line)
-		  (while (re-search-forward
-			  "^\\([^=]+\\)[[:space:]]*=[[:space:]]*\".*\"$"
-			  (line-end-position) t)
-		    (push (substring-no-properties (match-string 1)) scripts)
-		    (forward-line)
-		    (beginning-of-line)))))
-	     scripts))))
+  "Run COMMAND in the project environment."
+  (interactive
+   (progn
+     (uv-ensure-in-project)
+     (list (completing-read "Command: " (uv--project-scripts)))))
   (uv-ensure-in-project)
-  (uv-call 'run (split-string command "[[:space:]]+" t) nil t t))
+  (uv-call 'run (split-string command "[[:space:]]+" t)))
 
+(defun uv-call (command &optional args)
+  "Run uv COMMAND with ARGS asynchronously, reporting in the minibuffer.
+The full output is kept in the `uv-buffer-name' buffer, which is not
+displayed.  Use `uv-show-output' to visit it."
+  (let* ((default-directory (or (uv-find-project-root) default-directory))
+         (command-line (mapconcat #'shell-quote-argument
+                                  (cons uv-executable
+                                        (cons (symbol-name command) args))
+                                  " "))
+         ;; keep the compilation buffer off-screen; the outcome is echoed instead
+         (display-buffer-alist
+          (cons (list (regexp-quote (uv-buffer-name))
+                      #'display-buffer-no-window
+                      '(allow-no-window . t))
+                display-buffer-alist))
+         ;; a pipe rather than a pty: uv then skips the progress spinner and its
+         ;; erase-line escapes, and no CR is appended to every line
+         (process-connection-type nil))
+    (message "%s..." command-line)
+    (compilation-start command-line #'uv-mode (lambda (_mode) (uv-buffer-name)))))
 
-(defun uv-call (command &optional args) ;; Removed output and blocking parameters
-  "Call uv COMMAND with the given ARGS synchronously.
-Signals an error if the uv process returns a non-zero exit code."
+;;;###autoload
+(defun uv-show-output ()
+  "Display the output of the last uv command."
+  (interactive)
+  (if-let* ((buffer (get-buffer (uv-buffer-name))))
+      (pop-to-buffer buffer)
+    (uv--error "No uv command has been run yet")))
 
-  (let* ((process-command "uv")
-         (full-args (append (list (symbol-name command)) (or args '()))) ;; Ensure args is a list
-         (output-buffer (get-buffer-create (uv-buffer-name)))
-         exit-code)
-
-    ;; Clear the output buffer and add command header
-    (with-current-buffer output-buffer
-      (setq buffer-read-only nil)
-      (erase-buffer)
-      (insert (format "uv %s\n" (string-join full-args " "))
-              (make-string (window-width) ?-) "\n")) ;; Setting mode for colored output etc.
-
-    ;; Call the process synchronously
-    (setq exit-code (apply #'call-process
-                           process-command
-                           nil                 ; no input
-                           output-buffer       ; stdout goes here
-                           output-buffer       ; stderr goes here
-                           full-args))         ; Pass the list of string arguments
-
-    ;; Make the buffer read-only after the process finishes
-    (with-current-buffer output-buffer (setq buffer-read-only t))
-
-    ;; Check exit code and signal error if non-zero
-    (unless (= exit-code 0)
-      ;; Signal error
-      (message "Command 'uv %s' failed with exit code %s. See buffer %s for details."
-                (string-join full-args " ") exit-code (buffer-name output-buffer))
-      ;; =uv-error= signals the error and stops execution here.
-      )
-    t))
+(define-derived-mode uv-mode compilation-mode "uv"
+  "Major mode for uv command output."
+  ;; uv is handed a pty by `compilation-start', so it emits colour
+  (when (fboundp 'ansi-color-compilation-filter)
+    (add-hook 'compilation-filter-hook #'ansi-color-compilation-filter nil t))
+  (add-hook 'compilation-finish-functions #'uv--echo-result nil t))
 
 ;; Helpers
 ;;;;;;;;;;
 
-(defun uv-get-configuration (key)
-  "Return Uv configuration for KEY.
+(defun uv--error (format &rest args)
+  "Signal a uv error using FORMAT and ARGS."
+  (apply #'user-error (concat "uv: " format) args))
 
-\(type `uv config --list' to get a list of usable configuration keys.)"
-  (let ((bufname (uv-call 'config (list key) nil nil t)))
-    (with-current-buffer bufname
-      (when (progn
-	      (goto-char (point-min))
-	      (re-search-forward "ValueError" nil t))
-	(uv-error "Unrecognized key configuration: %s" key))
-      (goto-char (point-min))
-      ;; Parse as JSON if possible, otherwise return trimmed string
-      (let* ((json-key-type 'string)
-	     (json-false nil)
-	     (data (buffer-substring-no-properties
-		    (point-min) (point-max)))
-	     (rawconfig (replace-regexp-in-string
-			 "'" "\"" data)))
-	(condition-case nil
-	    (json-read-from-string rawconfig)
-	  (error (string-trim rawconfig)))))))
+(defconst uv--noise-regexp
+  (concat "\\`[[:space:]]*\\'"
+          ;; per-package detail lines such as " + requests==2.34.2"
+          "\\|\\`[[:space:]]"
+          ;; the footer `compilation-handle-exit' appends
+          "\\|\\`uv \\(?:finished\\|exited\\|interrupt\\|killed\\|terminated\\)")
+  "Matches uv output lines not worth echoing in the minibuffer.")
+
+(defun uv--result-line ()
+  "Return the last informative line of uv output in the current buffer."
+  (save-excursion
+    (goto-char (point-max))
+    (let (line)
+      (while (and (not line) (not (bobp)))
+        (forward-line -1)
+        (let ((candidate (string-trim-right
+                          (buffer-substring-no-properties
+                           (line-beginning-position) (line-end-position)))))
+          (unless (string-match-p uv--noise-regexp candidate)
+            (setq line candidate))))
+      line)))
+
+(defun uv--echo-result (buffer status)
+  "Echo how the uv run in BUFFER ended.  STATUS is its compilation status."
+  (with-current-buffer buffer
+    (let* ((failed (not (string-prefix-p "finished" status)))
+           ;; truncate only the message, so the pointer to the buffer survives
+           (suffix (if failed (format "  [%s]" (buffer-name)) ""))
+           (line (or (uv--result-line) (string-trim status)))
+           (text (concat (truncate-string-to-width
+                          line
+                          (max 20 (- (frame-width) 1 (string-width suffix)))
+                          nil nil t)
+                         suffix)))
+      (message "%s" (if failed (propertize text 'face 'error) text)))))
+
+(defun uv--transient-args (prefix)
+  "Return the arguments of transient PREFIX, or nil when it is not active."
+  (and (eq transient-current-command prefix)
+       (transient-args prefix)))
 
 (defun uv-buffer-name (&optional suffix)
   "Return the uv buffer name, using SUFFIX is specified."
@@ -376,55 +290,110 @@ Signals an error if the uv process returns a non-zero exit code."
       (format "*uv-%s*" suffix)
     "*uv*"))
 
-(defun uv-normalize-project-name (project-name)
-  "Return a normalized version of the PROJECT-NAME."
-  (replace-regexp-in-string "-+" "_" (downcase project-name)))
+(defun uv--toml-table (name)
+  "Move point past the header of TOML table NAME and return where it ends.
+Return nil when the table is absent."
+  (goto-char (point-min))
+  (when (re-search-forward
+         (concat "^[[:space:]]*\\[" (regexp-quote name) "\\][[:space:]]*$")
+         nil t)
+    (save-excursion
+      ;; A failed search leaves point where it was, so fall back to point-max
+      ;; explicitly rather than reading point back.
+      (if (re-search-forward "^[[:space:]]*\\[" nil t)
+          (match-beginning 0)
+        (point-max)))))
 
-(defun uv-display-buffer (&optional buffer-name)
-  "Display the uv buffer or the BUFFER-NAME buffer."
-  (with-current-buffer (or buffer-name (uv-buffer-name))
-    (let ((buffer-read-only nil))
-      (display-buffer (or buffer-name (uv-buffer-name))))))
+(defun uv--toml-string-array (key limit)
+  "Return the strings of the TOML array bound to KEY, searching up to LIMIT.
+Search starts at point.  Bracket characters inside a quoted element, as in
+\"uvicorn[standard]\", are skipped over with the element."
+  (save-excursion
+    (when (re-search-forward
+           (concat "^[[:space:]]*" (regexp-quote key)
+                   "[[:space:]]*=[[:space:]]*\\[")
+           limit t)
+      (let (values done)
+        (while (not done)
+          (skip-chars-forward "^]\"" limit)
+          (cond
+           ((>= (point) limit) (setq done t))
+           ((eq (char-after) ?\]) (setq done t))
+           (t
+            (forward-char 1)
+            (let ((start (point)))
+              (skip-chars-forward "^\"" limit)
+              (push (buffer-substring-no-properties start (point)) values)
+              (unless (eobp) (forward-char 1))))))
+        (nreverse values)))))
 
-(defun uv-get-dependencies (&optional dev opt)
-  "Return the list of project dependencies.
+(defun uv--toml-array-keys (limit)
+  "Return the array-valued keys of the TOML table ending at LIMIT.
+Search starts at point."
+  (save-excursion
+    (let (keys)
+      (while (re-search-forward
+              "^[[:space:]]*\\([A-Za-z0-9_.-]+\\)[[:space:]]*=[[:space:]]*\\["
+              limit t)
+        (push (match-string-no-properties 1) keys))
+      (nreverse keys))))
 
-If DEV is non-nil, install a developement dep.
-If OPT is non-nil, set an optional dep."
+(defun uv--requirement-name (requirement)
+  "Return the bare package name of the PEP 508 REQUIREMENT string."
+  (if (string-match "\\`[[:space:]]*\\([A-Za-z0-9._-]+\\)" requirement)
+      (match-string 1 requirement)
+    requirement))
+
+(defun uv--dependency-candidates ()
+  "Return an alist of (DISPLAY . REMOVE-ARGS) for every declared dependency."
   (uv-with-current-file (uv-find-pyproject-file)
-     (goto-char (point-min))
-     (if dev
-	 (unless
-	     (re-search-forward "^\\[tool\\.uv\\.dev-dependencies\\]"
-				nil t)
-	   (uv-error "No dependencies to remove"))
-       (unless
-	      (re-search-forward "^\\[tool\\.uv\\.dependencies\\]"
-				 nil t)
-	 (uv-error "No dependencies to remove")))
-     (let ((beg (point))
-	   (end (progn (re-search-forward "^\\[" nil t)
-		       (point)))
-	   (regex
-	    "^\\(?1:[^= ]*\\)[[:space:]]*=[[:space:]]*\\({\\|\"\\)\\(?2:.*\\)\\(}\\|\"\\)")
-	   deps
-	   filtered-deps)
-       (goto-char beg)
-       (while (re-search-forward regex end t)
-	 (push (format "%s (%s)"
-		       (substring-no-properties (match-string 1))
-		       (substring-no-properties (match-string 2)))
-	       deps))
-       ;; clean from opt/not opt deps
-       (dolist (dep deps)
-	 (if opt
-	     (when (string-match "optional = true" dep)
-	       (push (replace-regexp-in-string ",?[[:space:]]*optional = true" "" dep)
-		     filtered-deps))
-	   (when (not (string-match "optional = true" dep))
-	       (push dep filtered-deps))))
-       filtered-deps)))
+    (save-excursion
+      (let (candidates)
+        (let ((end (uv--toml-table "project")))
+          (when end
+            (dolist (req (uv--toml-string-array "dependencies" end))
+              (push (cons (format "[dep]  %s" req)
+                          (list (uv--requirement-name req)))
+                    candidates))))
+        (let ((end (uv--toml-table "project.optional-dependencies")))
+          (when end
+            (let ((start (point)))
+              (dolist (extra (uv--toml-array-keys end))
+                (goto-char start)
+                (dolist (req (uv--toml-string-array extra end))
+                  (push (cons (format "[opt:%s]  %s" extra req)
+                              (list (uv--requirement-name req) "--optional" extra))
+                        candidates))))))
+        (let ((end (uv--toml-table "dependency-groups")))
+          (when end
+            (let ((start (point)))
+              (dolist (group (uv--toml-array-keys end))
+                (goto-char start)
+                (dolist (req (uv--toml-string-array group end))
+                  (push (cons (format "[%s]  %s" group req)
+                              (list (uv--requirement-name req) "--group" group))
+                        candidates))))))
+        ;; uv wrote dev dependencies here before PEP 735 groups
+        (let ((end (uv--toml-table "tool.uv")))
+          (when end
+            (dolist (req (uv--toml-string-array "dev-dependencies" end))
+              (push (cons (format "[dev]  %s" req)
+                          (list (uv--requirement-name req) "--dev"))
+                    candidates))))
+        (nreverse candidates)))))
 
+(defun uv--project-scripts ()
+  "Return the console scripts declared in the `[project.scripts]' table."
+  (uv-with-current-file (uv-find-pyproject-file)
+    (save-excursion
+      (let ((end (uv--toml-table "project.scripts"))
+            scripts)
+        (when end
+          (while (re-search-forward
+                  "^[[:space:]]*\\([A-Za-z0-9_.-]+\\)[[:space:]]*=[[:space:]]*\""
+                  end t)
+            (push (match-string-no-properties 1) scripts)))
+        (nreverse scripts)))))
 
 ;;;###autoload
 (defun uv-find-project-root ()
@@ -438,10 +407,16 @@ If OPT is non-nil, set an optional dep."
     ;; If locate-dominating-file finds root, file is read, and pattern matches,
     ;; execute this body and return its value, which is the 'root'.
     root))
+
+(defun uv-find-pyproject-file ()
+  "Return the path to the current project `pyproject.toml', or nil."
+  (when-let* ((root (uv-find-project-root)))
+    (expand-file-name "pyproject.toml" root)))
+
 (defun uv-ensure-in-project ()
   "Return an error if not in a uv project."
-  (unless (find-project-root)
-    (uv-error "Not in a uv project")))
+  (unless (uv-find-project-root)
+    (uv--error "Not in a uv project")))
 
 (provide 'uv)
 ;;; uv.el ends here
